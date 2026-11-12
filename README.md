@@ -11,7 +11,7 @@ VST3 for Windows and macOS (Intel + Apple Silicon).
 - **16 shapes** — from a classic duck to gates, holds, double and triplet pumps
 - **Rates** — 1/16, 1/8, 1/4, 1/2, 1 bar, locked to the host tempo and song position
 - **Three triggers** — tempo sync, audio (sidechain input), or MIDI notes
-- **Low band only** — duck just the bass below an adjustable crossover and leave the top end alone
+- **Band split** — duck just the bass below an adjustable crossover and leave the top end alone
 - **Mix** — from subtle to full duck
 - Live curve display with playhead
 
@@ -32,12 +32,12 @@ To uninstall, delete `Pump.vst3` from `C:\Program Files\Common Files\VST3\` (Win
 
 | Control | What it does |
 |---|---|
-| Shape | The ducking curve |
+| Shape | The ducking curve; browse with the arrows or the menu |
 | Rate | Length of one cycle |
 | Trigger | **Sync** repeats with the tempo. **Audio** and **MIDI** play the shape once per hit |
 | Mix | How deep the duck goes |
-| Low band only | Duck only what's below the crossover |
-| Crossover | Split frequency for low band only (40–2000 Hz) |
+| Band split | **Full range** ducks everything; **Low only** ducks what's below the crossover |
+| Crossover | Split frequency for band split (40–2000 Hz) |
 | Threshold | How loud the sidechain must be to trigger (Audio mode) |
 
 ### Triggering in FL Studio
@@ -66,7 +66,7 @@ The plugin lands in `build/Pump_artefacts/Release/VST3/`.
 ## Release
 
 ```bash
-git tag v1.1.0 && git push --tags
+git tag v1.2.0 && git push --tags
 ```
 
 GitHub Actions builds, tests, and attaches both installers to a new release.
