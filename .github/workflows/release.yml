@@ -1,0 +1,34 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            zip: zip -r Pump-macOS.zip Pump.vst3
+            file: Pump-macOS.zip
+          - os: windows-latest
+            zip: 7z a Pump-Windows.zip Pump.vst3
+            file: Pump-Windows.zip
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - run: cd build/Pump_artefacts/Release/VST3 && ${{ matrix.zip }}
+      - run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes || true
+          gh release upload "$GITHUB_REF_NAME" "build/Pump_artefacts/Release/VST3/${{ matrix.file }}" --clobber
