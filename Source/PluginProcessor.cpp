@@ -1,106 +1,149 @@
-#include <juce_audio_processors/juce_audio_processors.h>
-#include "Duck.h"
+#include "PumpProcessor.h"
 
-class PumpProcessor : public juce::AudioProcessor
+//==============================================================================
+class PumpEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
+    using APVTS = juce::AudioProcessorValueTreeState;
+    const juce::Colour bg { 0xff14161c }, panel { 0xff1e222b }, accent { 0xff3ddc97 }, dim { 0xff8a93a6 };
+
 public:
-    PumpProcessor()
-        : AudioProcessor (BusesProperties()
-                              .withInput ("Input", juce::AudioChannelSet::stereo())
-                              .withOutput ("Output", juce::AudioChannelSet::stereo())),
-          params (*this, nullptr, "params",
-                  { std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "depth", 1 }, "Depth", 0.0f, 1.0f, 1.0f),
-                    std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "rate", 1 }, "Rate",
-                                                                  juce::StringArray { "1/8", "1/4", "1/2", "1 bar" }, 1),
-                    std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "curve", 1 }, "Curve",
-                                                                 juce::NormalisableRange<float> (0.25f, 4.0f, 0.0f, 0.5f), 1.0f) })
+    explicit PumpEditor (PumpProcessor& p) : AudioProcessorEditor (p), proc (p)
     {
+        laf.setColour (juce::Slider::rotarySliderFillColourId, accent);
+        laf.setColour (juce::Slider::rotarySliderOutlineColourId, panel);
+        laf.setColour (juce::Slider::thumbColourId, juce::Colours::white);
+        laf.setColour (juce::ComboBox::backgroundColourId, panel);
+        laf.setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
+        laf.setColour (juce::PopupMenu::backgroundColourId, panel);
+        laf.setColour (juce::PopupMenu::highlightedBackgroundColourId, accent.withAlpha (0.3f));
+        laf.setColour (juce::ToggleButton::tickColourId, accent);
+        setLookAndFeel (&laf);
+
+        addCombo (shape, "shape");
+        addCombo (rate, "rate");
+        addCombo (trigger, "trigger");
+        addKnob (mix, "mix", " %");
+        addKnob (xover, "xover", " Hz");
+        addKnob (thresh, "thresh", " dB");
+
+        band.setButtonText ("Low band only");
+        addAndMakeVisible (band);
+        buttonLinks.add (new APVTS::ButtonAttachment (proc.params, "band", band));
+
+        setSize (560, 400);
+        startTimerHz (30);
     }
 
-    void prepareToPlay (double sampleRate, int) override
+    ~PumpEditor() override { setLookAndFeel (nullptr); }
+
+    void paint (juce::Graphics& g) override
     {
-        // 2 ms smoothing so the drop at the start of each cycle doesn't click
-        smooth = 1.0f - std::exp (-1.0f / (0.002f * (float) sampleRate));
-        gain = 1.0f;
-    }
+        g.fillAll (bg);
+        g.setColour (accent);
+        g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+        g.drawText ("PUMP", 16, 10, 200, 28, juce::Justification::centredLeft);
 
-    void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
-    {
-        juce::ScopedNoDenormals noDenormals;
+        // Curve display: the current shape at the current mix, with a moving playhead
+        const auto d = display.toFloat();
+        g.setColour (panel);
+        g.fillRoundedRectangle (d, 6.0f);
 
-        double bpm = 120.0;
-        if (auto* playHead = getPlayHead())
-            if (auto pos = playHead->getPosition())
-            {
-                if (auto b = pos->getBpm())
-                    bpm = *b;
-                // Lock to the song position while playing; free-run from wherever we were when stopped.
-                if (auto ppq = pos->getPpqPosition(); ppq && pos->getIsPlaying())
-                    beats = *ppq;
-            }
-
-        // ponytail: "1 bar" assumes 4/4; read the host time signature if odd meters matter
-        static constexpr double beatsPerCycle[] = { 0.5, 1.0, 2.0, 4.0 };
-        // rate comes from saved state: never index with it unchecked
-        const float r = rate->load();
-        const double cycle = beatsPerCycle[std::isfinite (r) ? (int) juce::jlimit (0.0f, (float) std::size (beatsPerCycle) - 1.0f, r) : 1];
-        const double beatsPerSample = bpm / (60.0 * getSampleRate());
-        const float d = depth->load(), c = curve->load();
-
-        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        const int shapeIndex = shape.getSelectedItemIndex();
+        const float mixNow = (float) mix.getValue() / 100.0f;
+        const auto inner = d.reduced (10.0f);
+        juce::Path curve;
+        for (float x = 0.0f; x <= inner.getWidth(); x += 1.0f)
         {
-            double phase = beats / cycle;
-            phase -= std::floor (phase);
-            gain += smooth * (duckGain ((float) phase, c, d) - gain);
-
-            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-                buffer.getWritePointer (ch)[i] *= gain;
-
-            beats += beatsPerSample;
+            // stop just short of 1.0, which means "cycle finished"
+            const float gain = duckGain (shapeIndex, 0.999f * x / inner.getWidth(), mixNow);
+            const float y = inner.getBottom() - gain * inner.getHeight();
+            if (x == 0.0f)
+                curve.startNewSubPath (inner.getX(), y);
+            else
+                curve.lineTo (inner.getX() + x, y);
         }
+        g.setColour (accent);
+        g.strokePath (curve, juce::PathStrokeType (2.0f));
+        curve.lineTo (inner.getRight(), inner.getBottom());
+        curve.lineTo (inner.getX(), inner.getBottom());
+        curve.closeSubPath();
+        g.setColour (accent.withAlpha (0.15f));
+        g.fillPath (curve);
+
+        if (const float phase = proc.displayPhase.load(); phase >= 0.0f && phase < 1.0f)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.8f));
+            g.fillRect (inner.getX() + phase * inner.getWidth(), inner.getY(), 1.5f, inner.getHeight());
+        }
+
+        g.setColour (dim);
+        g.setFont (juce::FontOptions (12.0f));
+        for (auto [component, text] : { std::pair<juce::Component*, const char*> { &shape, "SHAPE" }, { &rate, "RATE" }, { &trigger, "TRIGGER" },
+                                        { &mix, "MIX" }, { &xover, "CROSSOVER" }, { &thresh, "THRESHOLD" } })
+            g.drawText (text, component->getX(), component->getY() - 16, component->getWidth(), 14, juce::Justification::centred);
     }
 
-    bool isBusesLayoutSupported (const BusesLayout& layouts) const override
+    void resized() override
     {
-        const auto out = layouts.getMainOutputChannelSet();
-        return out == layouts.getMainInputChannelSet()
-            && (out == juce::AudioChannelSet::mono() || out == juce::AudioChannelSet::stereo());
+        auto area = getLocalBounds().reduced (16);
+        area.removeFromTop (30);
+
+        auto knobs = area.removeFromBottom (96);
+        const int knobWidth = knobs.getWidth() / 4;
+        mix.setBounds (knobs.removeFromLeft (knobWidth));
+        xover.setBounds (knobs.removeFromLeft (knobWidth));
+        thresh.setBounds (knobs.removeFromLeft (knobWidth));
+        band.setBounds (knobs.withSizeKeepingCentre (knobs.getWidth() - 8, 24));
+
+        area.removeFromBottom (24);
+        auto combos = area.removeFromBottom (26);
+        const int comboWidth = combos.getWidth() / 3;
+        shape.setBounds (combos.removeFromLeft (comboWidth).reduced (4, 0));
+        rate.setBounds (combos.removeFromLeft (comboWidth).reduced (4, 0));
+        trigger.setBounds (combos.reduced (4, 0));
+
+        area.removeFromBottom (24);
+        display = area;
     }
-
-    void getStateInformation (juce::MemoryBlock& dest) override
-    {
-        if (auto xml = params.copyState().createXml())
-            copyXmlToBinary (*xml, dest);
-    }
-
-    void setStateInformation (const void* data, int size) override
-    {
-        if (auto xml = getXmlFromBinary (data, size); xml && xml->hasTagName (params.state.getType()))
-            params.replaceState (juce::ValueTree::fromXml (*xml));
-    }
-
-    // ponytail: host-style sliders, no custom UI; add an editor with a curve display when looks matter
-    juce::AudioProcessorEditor* createEditor() override { return new juce::GenericAudioProcessorEditor (*this); }
-    bool hasEditor() const override { return true; }
-
-    const juce::String getName() const override { return "Pump"; }
-    void releaseResources() override {}
-    bool acceptsMidi() const override { return false; }
-    bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
-    void changeProgramName (int, const juce::String&) override {}
 
 private:
-    juce::AudioProcessorValueTreeState params;
-    std::atomic<float>* depth = params.getRawParameterValue ("depth");
-    std::atomic<float>* rate = params.getRawParameterValue ("rate");
-    std::atomic<float>* curve = params.getRawParameterValue ("curve");
-    double beats = 0.0;
-    float gain = 1.0f, smooth = 1.0f;
+    void timerCallback() override
+    {
+        xover.setEnabled (band.getToggleState());
+        thresh.setEnabled (trigger.getSelectedItemIndex() == audio);
+        repaint (display);
+    }
+
+    void addCombo (juce::ComboBox& box, const char* id)
+    {
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (proc.params.getParameter (id)))
+            box.addItemList (choice->choices, 1);
+        addAndMakeVisible (box);
+        comboLinks.add (new APVTS::ComboBoxAttachment (proc.params, id, box));
+    }
+
+    void addKnob (juce::Slider& knob, const char* id, const char* suffix)
+    {
+        knob.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        knob.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 80, 18);
+        knob.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        addAndMakeVisible (knob);
+        sliderLinks.add (new APVTS::SliderAttachment (proc.params, id, knob));
+        knob.setTextValueSuffix (suffix);
+    }
+
+    PumpProcessor& proc;
+    juce::LookAndFeel_V4 laf;
+    juce::ComboBox shape, rate, trigger;
+    juce::Slider mix, xover, thresh;
+    juce::ToggleButton band;
+    juce::Rectangle<int> display;
+    // Declared after the controls so the attachments are destroyed first
+    juce::OwnedArray<APVTS::ComboBoxAttachment> comboLinks;
+    juce::OwnedArray<APVTS::SliderAttachment> sliderLinks;
+    juce::OwnedArray<APVTS::ButtonAttachment> buttonLinks;
 };
+
+juce::AudioProcessorEditor* PumpProcessor::createEditor() { return new PumpEditor (*this); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new PumpProcessor(); }
