@@ -21,6 +21,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false  # build steps run third-party code; keep the repo token away from them
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build -C Release --output-on-failure
@@ -35,9 +37,7 @@ jobs:
 
       - name: Windows installer
         if: runner.os == 'Windows'
-        run: |
-          choco install innosetup -y --no-progress
-          iscc installer.iss
+        run: iscc installer.iss  # Inno Setup ships with the runner image
 
       # Token only on the release step, not visible to the build
       - env:
