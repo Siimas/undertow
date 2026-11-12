@@ -43,7 +43,7 @@ public:
         static constexpr double beatsPerCycle[] = { 0.5, 1.0, 2.0, 4.0 };
         // rate comes from saved state: never index with it unchecked
         const float r = rate->load();
-        const double cycle = beatsPerCycle[std::isfinite (r) ? juce::jlimit (0, 3, (int) r) : 1];
+        const double cycle = beatsPerCycle[std::isfinite (r) ? (int) juce::jlimit (0.0f, (float) std::size (beatsPerCycle) - 1.0f, r) : 1];
         const double beatsPerSample = bpm / (60.0 * getSampleRate());
         const float d = depth->load(), c = curve->load();
 
