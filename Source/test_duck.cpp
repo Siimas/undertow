@@ -1,6 +1,7 @@
 #undef NDEBUG
 #include <cassert>
 #include "Duck.h"
+#include "Version.h"
 
 int main()
 {
@@ -28,5 +29,18 @@ int main()
     assert (duckGain (0, 0.0f, 99.0f) == 0.0f);   // out-of-range mix is clamped
     assert (duckGain (999, 0.0f, 1.0f) == 0.0f);  // out-of-range shape is clamped, no crash
     assert (duckGain (-5, 0.0f, 1.0f) == 0.0f);
+
+    assert (shiftedPhase (0.0f, 0.0f) == 0.0f);
+    assert (shiftedPhase (0.0f, 1.0e-9f) < 1.0f);  // must wrap to the start, never land on "finished"
+    assert (shiftedPhase (0.5f, 0.25f) == 0.25f);  // positive shift: the shape happens later
+    assert (shiftedPhase (0.1f, 0.25f) > 0.84f);
+
+    assert (Version ("v1.3.0").newerThan (Version ("1.2.9")));
+    assert (Version ("1.10.0").newerThan (Version ("1.9.5")));  // numeric, not alphabetical
+    assert (! Version ("1.2.0").newerThan (Version ("1.2.0")));
+    assert (! Version ("v1.1.9").newerThan (Version ("1.2.0")));
+    assert (! Version ("").newerThan (Version ("1.2.0")));      // junk from the network never counts as newer
+    assert (! Version ("<html>").newerThan (Version ("1.2.0")));
+    assert (! Version ("99999999999.0.0").newerThan (Version ("1.2.0")) || Version ("99999999999.0.0").major <= 9999);
     return 0;
 }

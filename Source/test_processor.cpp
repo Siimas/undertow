@@ -84,6 +84,42 @@ int main()
         set (*p, "trigger", (float) audio);
         assert (run (*p).getSample (0, 2000) > 0.999f);
     }
+    {   // Length 50%: the shape is over by mid-cycle (sample 11025)
+        auto p = make();
+        set (*p, "length", 50.0f);
+        for (int i = 0; i < 3; ++i)
+            run (*p);
+        assert (run (*p).getSample (0, 1000) > 0.999f); // block 4 starts at sample 12288
+    }
+    {   // Shift +25%: the duck lands a quarter cycle (5512 samples) late
+        auto p = make();
+        set (*p, "shift", 25.0f);
+        assert (run (*p).getSample (0, 2000) > 0.6f);
+        auto second = run (*p); // samples 4096..8191
+        assert (second.getSample (0, 2000) < 0.1f);
+    }
+    {   // Host transport: idle when stopped, ducking when playing
+        struct Transport : juce::AudioPlayHead
+        {
+            bool playing = false;
+            juce::Optional<PositionInfo> getPosition() const override
+            {
+                PositionInfo info;
+                info.setIsPlaying (playing);
+                info.setBpm (120.0);
+                info.setPpqPosition (0.0);
+                return info;
+            }
+        } transport;
+        auto p = make();
+        p->setPlayHead (&transport);
+        assert (run (*p).getSample (0, 2000) > 0.999f);
+        assert (p->displayPhase.load() >= 1.0f);
+        transport.playing = true;
+        assert (run (*p).getSample (0, 500) < 0.1f);
+        assert (p->displayPhase.load() < 1.0f);
+        p->setPlayHead (nullptr);
+    }
     {   // Band split: a 5 kHz tone is ducked normally, but left alone with "low band only"
         auto full = make();
         set (*full, "shape", 12.0f); // Gate: silent for the first half cycle

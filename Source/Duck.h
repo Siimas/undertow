@@ -58,3 +58,11 @@ inline float duckGain (int shape, float phase, float mix)
     }
     return 1.0f - mix * (1.0f - g);
 }
+
+// Slides the shape within the cycle: a positive shift (fraction of a cycle) makes the duck land later.
+inline float shiftedPhase (float position, float shift)
+{
+    const float p = position - shift;
+    const float wrapped = p - std::floor (p);
+    return wrapped < 1.0f ? wrapped : 0.0f; // a tiny negative p rounds up to exactly 1.0, which would mean "finished"
+}

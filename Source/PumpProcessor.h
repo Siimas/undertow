@@ -48,7 +48,11 @@ public:
                     std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "xover", 1 }, "Crossover",
                                                                  juce::NormalisableRange<float> (40.0f, 2000.0f, 1.0f, 0.4f), 200.0f),
                     std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "thresh", 1 }, "Threshold",
-                                                                 juce::NormalisableRange<float> (-48.0f, 0.0f, 0.1f), -18.0f) })
+                                                                 juce::NormalisableRange<float> (-48.0f, 0.0f, 0.1f), -18.0f),
+                    std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "shift", 1 }, "Shift",
+                                                                 juce::NormalisableRange<float> (-25.0f, 25.0f, 0.1f), 0.0f),
+                    std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "length", 1 }, "Length",
+                                                                 juce::NormalisableRange<float> (10.0f, 100.0f, 0.1f), 100.0f) })
     {
     }
 
@@ -73,9 +77,11 @@ public:
         auto side = getBusBuffer (buffer, true, 1); // zero channels when nothing is routed to it
 
         double bpm = 120.0;
+        bool stopped = false; // only true when a host says so; with no host info we free-run
         if (auto* playHead = getPlayHead())
             if (auto pos = playHead->getPosition())
             {
+                stopped = ! pos->getIsPlaying();
                 if (auto b = pos->getBpm(); b && *b > 0.0)
                     bpm = *b;
                 // Lock to the song position while playing; free-run from wherever we were when stopped.
@@ -88,13 +94,15 @@ public:
         const double cycle = rateBeats[choiceIndex (rateParam, (int) std::size (rateBeats))];
         const double beatsPerSample = bpm / (60.0 * rate);
         const float mix = finiteOr (mixParam->load(), 100.0f) / 100.0f;
+        const double shift = juce::jlimit (-25.0f, 25.0f, finiteOr (shiftParam->load(), 0.0f)) / 100.0;
+        const float length = juce::jlimit (10.0f, 100.0f, finiteOr (lengthParam->load(), 100.0f)) / 100.0f;
         const bool split = bandParam->load() > 0.5f;
         const float threshold = juce::Decibels::decibelsToGain (juce::jlimit (-48.0f, 0.0f, finiteOr (threshParam->load(), -18.0f)));
         crossover.setCutoffFrequency (juce::jlimit (40.0f, 2000.0f, finiteOr (xoverParam->load(), 200.0f)));
 
         const int channels = juce::jmin (main.getNumChannels(), 2);
         auto midiEvent = midiIn.begin();
-        float phase = 1.0f;
+        float position = 1.0f; // where we are in the cycle, 0..1; >= 1 means idle
 
         for (int i = 0; i < main.getNumSamples(); ++i)
         {
@@ -116,31 +124,48 @@ public:
             else if (env < threshold * 0.5f)
                 armed = true; // re-arm once the hit has died away
 
-            if (mode == sync)
+            float phase = 1.0f; // position along the shape
+            if (mode != sync)
             {
-                double p = beats / cycle;
-                phase = (float) (p - std::floor (p));
-            }
-            else
-            {
-                phase = (float) oneShot;
+                position = phase = (float) oneShot;
                 oneShot = juce::jmin (1.0, oneShot + beatsPerSample / cycle);
             }
+            else if (stopped)
+                position = 1.0f; // transport stopped: leave the audio alone
+            else
+            {
+                const double p = beats / cycle;
+                position = (float) (p - std::floor (p));
+                phase = shiftedPhase (position, (float) shift);
+            }
 
-            gain += smooth * (duckGain (shape, phase, mix) - gain);
+            gain += smooth * (duckGain (shape, phase / length, mix) - gain);
 
+            float peak = 0.0f;
             for (int ch = 0; ch < channels; ++ch)
             {
                 float* data = main.getWritePointer (ch);
                 float low = 0.0f, high = 0.0f;
                 crossover.processSample (ch, data[i], low, high); // always running so the toggle never clicks
                 data[i] = split ? low * gain + high : data[i] * gain;
+                peak = juce::jmax (peak, std::abs (data[i]));
+            }
+
+            // Output level per cycle position, for the editor's waveform
+            if (position < 1.0f)
+            {
+                const int bin = juce::jlimit (0, scopeSize - 1, (int) (position * (float) scopeSize));
+                if (bin != lastBin)
+                    scope[(size_t) bin].store (0.0f);
+                lastBin = bin;
+                if (peak > scope[(size_t) bin].load())
+                    scope[(size_t) bin].store (finiteOr (peak, 0.0f));
             }
 
             beats += beatsPerSample;
         }
 
-        displayPhase.store (phase);
+        displayPhase.store (position);
     }
 
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override
@@ -181,6 +206,8 @@ public:
 
     juce::AudioProcessorValueTreeState params;
     std::atomic<float> displayPhase { 1.0f }; // for the editor's playhead; >= 1 means idle
+    static constexpr int scopeSize = 256;
+    std::array<std::atomic<float>, scopeSize> scope {};
 
 private:
     std::atomic<float>* shapeParam = params.getRawParameterValue ("shape");
@@ -190,9 +217,12 @@ private:
     std::atomic<float>* bandParam = params.getRawParameterValue ("band");
     std::atomic<float>* xoverParam = params.getRawParameterValue ("xover");
     std::atomic<float>* threshParam = params.getRawParameterValue ("thresh");
+    std::atomic<float>* shiftParam = params.getRawParameterValue ("shift");
+    std::atomic<float>* lengthParam = params.getRawParameterValue ("length");
 
     juce::dsp::LinkwitzRileyFilter<float> crossover;
     double rate = 44100.0, beats = 0.0, oneShot = 1.0;
     float gain = 1.0f, smooth = 1.0f, env = 0.0f, envDecay = 0.0f;
     bool armed = true;
+    int lastBin = -1;
 };
