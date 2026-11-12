@@ -21,14 +21,15 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build -C Release --output-on-failure
       - run: cd build/Pump_artefacts/Release/VST3 && ${{ matrix.zip }}
-      - run: |
+      # Token only on the release step, not visible to the build
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh release create "$GITHUB_REF_NAME" --generate-notes || true
           gh release upload "$GITHUB_REF_NAME" "build/Pump_artefacts/Release/VST3/${{ matrix.file }}" --clobber

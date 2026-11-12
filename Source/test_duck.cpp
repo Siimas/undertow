@@ -9,5 +9,7 @@ int main()
     assert (duckGain (0.3f, 2.0f, 0.0f) == 1.0f);   // zero depth: untouched
     assert (duckGain (0.0f, 1.0f, 0.5f) == 0.5f);   // half depth: half duck
     assert (duckGain (0.5f, 0.5f, 1.0f) > duckGain (0.5f, 2.0f, 1.0f)); // low curve recovers faster
+    assert (duckGain (NAN, 1.0f, 1.0f) == 1.0f);    // bad input: leave audio untouched
+    assert (duckGain (0.0f, 1.0f, 99.0f) == 0.0f);  // out-of-range depth is clamped
     return 0;
 }

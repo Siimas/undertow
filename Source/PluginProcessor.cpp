@@ -41,7 +41,9 @@ public:
 
         // ponytail: "1 bar" assumes 4/4; read the host time signature if odd meters matter
         static constexpr double beatsPerCycle[] = { 0.5, 1.0, 2.0, 4.0 };
-        const double cycle = beatsPerCycle[(int) rate->load()];
+        // rate comes from saved state: never index with it unchecked
+        const float r = rate->load();
+        const double cycle = beatsPerCycle[std::isfinite (r) ? juce::jlimit (0, 3, (int) r) : 1];
         const double beatsPerSample = bpm / (60.0 * getSampleRate());
         const float d = depth->load(), c = curve->load();
 
@@ -73,7 +75,7 @@ public:
 
     void setStateInformation (const void* data, int size) override
     {
-        if (auto xml = getXmlFromBinary (data, size))
+        if (auto xml = getXmlFromBinary (data, size); xml && xml->hasTagName (params.state.getType()))
             params.replaceState (juce::ValueTree::fromXml (*xml));
     }
 
