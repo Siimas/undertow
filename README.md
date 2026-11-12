@@ -82,10 +82,8 @@ Sync is all most tracks need. If your kick pattern isn't a steady beat, let the 
 
 ## Removing it
 
-Delete `Undertow.vst3` from:
-
-- Windows: `C:\Program Files\Common Files\VST3\`
-- Mac: `/Library/Audio/Plug-Ins/VST3/`
+- **Windows:** open Settings → Apps → Installed apps, find Undertow and choose Uninstall.
+- **Mac:** delete `Undertow.vst3` from `/Library/Audio/Plug-Ins/VST3/`.
 
 ## Privacy
 

@@ -4,8 +4,9 @@
 
 namespace
 {
-const juce::Colour bgTop { 0xff1c1f29 }, bgBottom { 0xff0d0f14 }, card { 0xff222632 }, cardLow { 0xff1a1d27 },
-    raised { 0xff2c3140 }, raisedHover { 0xff363c4d }, screenTop { 0xff0a0b0f }, screenBottom { 0xff12141b },
+// The look: smooth black metal, machined knobs, keys with thickness, a display behind glass
+const juce::Colour panel { 0xff111214 }, slab { 0xff17191d }, keyFace { 0xff1b1d22 }, keyHover { 0xff26282e },
+    screenTop { 0xff0a0b0f }, screenBottom { 0xff12141b }, ink { 0xff0d0f14 },
     accent { 0xff3ddc97 }, text { 0xffe6e9ef }, dim { 0xff7d8698 };
 
 // Space Grotesk, bundled. Shared by everything that draws text and freed with the last editor.
@@ -28,45 +29,27 @@ void drawWordmark (juce::Graphics& g, const Fonts& fonts, juce::Rectangle<float>
     name.draw (g, area);
 }
 
-// The "Hardware" look: smooth black metal, machined knobs, a glass display. Off = the flat modern look.
-bool hardware = false;
-
-// Button and tile faces: lifted off the panel in the flat look, near-black in the hardware look
-juce::Colour face (bool hovered) { return hardware ? juce::Colour (hovered ? 0xff26282e : 0xff1b1d22) : hovered ? raisedHover : raised; }
-
 void drawMetal (juce::Graphics& g, juce::Rectangle<float> area, juce::Colour base)
 {
     g.setGradientFill ({ base.brighter (0.10f), 0.0f, area.getY(), base.darker (0.40f), 0.0f, area.getBottom(), false });
     g.fillRect (area);
 }
 
-const juce::DropShadow cardShadow { juce::Colours::black.withAlpha (0.55f), 16, { 0, 6 } };
-const juce::DropShadow smallShadow { juce::Colours::black.withAlpha (0.5f), 6, { 0, 2 } };
-
-// A raised surface: soft shadow underneath, gradient face, thin highlight along the top edge
+// A slab standing off the panel: long shadow, a front edge, a bevelled face
 void drawCard (juce::Graphics& g, juce::Rectangle<float> area, float radius = 10.0f)
 {
     juce::Path outline;
     outline.addRoundedRectangle (area, radius);
-    cardShadow.drawForPath (g, outline);
-    if (hardware)
+    juce::DropShadow (juce::Colours::black.withAlpha (0.75f), 30, { 0, 16 }).drawForPath (g, outline);
+    g.setColour (juce::Colour (0xff050506)); // front edge
+    g.fillRoundedRectangle (area.translated (0.0f, 5.0f), radius);
     {
-        juce::DropShadow (juce::Colours::black.withAlpha (0.75f), 30, { 0, 16 }).drawForPath (g, outline);
-        g.setColour (juce::Colour (0xff050506)); // the slab's front edge
-        g.fillRoundedRectangle (area.translated (0.0f, 5.0f), radius);
-        {
-            juce::Graphics::ScopedSaveState clip (g);
-            g.reduceClipRegion (outline);
-            drawMetal (g, area, juce::Colour (0xff17191d));
-        }
-        g.setGradientFill ({ juce::Colours::white.withAlpha (0.12f), 0.0f, area.getY(), juce::Colours::black.withAlpha (0.7f), 0.0f, area.getBottom(), false });
-        g.strokePath (outline, juce::PathStrokeType (1.5f)); // machined bevel
-        return;
+        juce::Graphics::ScopedSaveState clip (g);
+        g.reduceClipRegion (outline);
+        drawMetal (g, area, slab);
     }
-    g.setGradientFill ({ card, 0.0f, area.getY(), cardLow, 0.0f, area.getBottom(), false });
-    g.fillPath (outline);
-    g.setGradientFill ({ juce::Colours::white.withAlpha (0.10f), 0.0f, area.getY(), juce::Colours::transparentWhite, 0.0f, area.getY() + 24.0f, false });
-    g.strokePath (outline, juce::PathStrokeType (1.0f));
+    g.setGradientFill ({ juce::Colours::white.withAlpha (0.12f), 0.0f, area.getY(), juce::Colours::black.withAlpha (0.7f), 0.0f, area.getBottom(), false });
+    g.strokePath (outline, juce::PathStrokeType (1.5f)); // bevel
 }
 
 // The y of every x across `area` for a shape, as a path
@@ -91,11 +74,11 @@ struct UndertowLook : juce::LookAndFeel_V4
     {
         setColour (juce::Slider::textBoxTextColourId, text);
         setColour (juce::TextButton::textColourOffId, dim);
-        setColour (juce::TextButton::textColourOnId, bgBottom);
-        setColour (juce::PopupMenu::backgroundColourId, card);
+        setColour (juce::TextButton::textColourOnId, ink);
+        setColour (juce::PopupMenu::backgroundColourId, slab);
         setColour (juce::PopupMenu::textColourId, text);
         setColour (juce::PopupMenu::highlightedBackgroundColourId, accent);
-        setColour (juce::PopupMenu::highlightedTextColourId, bgBottom);
+        setColour (juce::PopupMenu::highlightedTextColourId, ink);
     }
 
     juce::SharedResourcePointer<Fonts> fonts;
@@ -103,46 +86,16 @@ struct UndertowLook : juce::LookAndFeel_V4
     juce::Font getLabelFont (juce::Label&) override { return juce::Font (fonts->get (14.0f)); }
     juce::Font getPopupMenuFont() override { return juce::Font (fonts->get (15.0f)); }
 
+    // A machined knob seen from straight above: a ring of ticks that light up to the value,
+    // a knurled grip and a domed cap. Its height comes from the shadow it casts and the light on its rim.
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float position,
                            float startAngle, float endAngle, juce::Slider& slider) override
     {
         const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat().reduced (5.0f);
         const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) / 2.0f;
         const auto centre = bounds.getCentre();
-        const float angle = startAngle + position * (endAngle - startAngle);
         const float alpha = slider.isEnabled() ? 1.0f : 0.25f;
-        if (hardware)
-        {
-            drawMachinedKnob (g, centre, radius, position, startAngle, endAngle, alpha);
-            return;
-        }
-        const juce::PathStrokeType stroke (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
 
-        juce::Path track, value;
-        track.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, endAngle, true);
-        value.addCentredArc (centre.x, centre.y, radius, radius, 0.0f, startAngle, angle, true);
-        g.setColour (juce::Colours::black.withAlpha (0.45f));
-        g.strokePath (track, stroke);
-        g.setColour (accent.withAlpha (alpha));
-        g.strokePath (value, stroke);
-
-        const float size = (radius - 9.0f) * 2.0f;
-        const auto face = juce::Rectangle<float> (size, size).withCentre (centre);
-        juce::Path cap;
-        cap.addEllipse (face);
-        juce::DropShadow (juce::Colours::black.withAlpha (0.7f), 10, { 0, 4 }).drawForPath (g, cap);
-        g.setGradientFill ({ raisedHover.brighter (0.2f), 0.0f, face.getY(), raised.darker (0.5f), 0.0f, face.getBottom(), false });
-        g.fillPath (cap);
-        g.setGradientFill ({ juce::Colours::white.withAlpha (0.28f), 0.0f, face.getY(), juce::Colours::transparentWhite, 0.0f, face.getCentreY(), false });
-        g.drawEllipse (face.reduced (0.5f), 1.0f);
-
-        g.setColour (text.withAlpha (alpha));
-        g.drawLine ({ centre.getPointOnCircumference (size * 0.2f, angle), centre.getPointOnCircumference (size * 0.5f - 4.0f, angle) }, 2.5f);
-    }
-
-    // A knurled aluminium knob with a ring of ticks that light up to the current value
-    static void drawMachinedKnob (juce::Graphics& g, juce::Point<float> centre, float radius, float position, float startAngle, float endAngle, float alpha)
-    {
         constexpr int ticks = 25;
         for (int i = 0; i < ticks; ++i)
         {
@@ -152,100 +105,61 @@ struct UndertowLook : juce::LookAndFeel_V4
             g.drawLine ({ centre.getPointOnCircumference (radius - 5.0f, angle), centre.getPointOnCircumference (radius, angle) }, lit ? 2.0f : 1.4f);
         }
 
-        const float outer = radius - 10.0f;
-        const auto skirt = juce::Rectangle<float> (outer * 2.0f, outer * 2.0f).withCentre (centre);
-        const float height = 8.0f; // how far the knob stands off the panel
-        juce::Path footprint;
-        footprint.addEllipse (skirt.translated (0.0f, height));
-        juce::DropShadow (juce::Colours::black.withAlpha (0.9f), 24, { 0, 16 }).drawForPath (g, footprint);
-        g.setGradientFill ({ juce::Colour (0xff24262a), skirt.getX(), 0.0f, juce::Colour (0xff060607), skirt.getRight(), 0.0f, false });
-        g.fillPath (footprint); // side wall: the base ellipse, joined up to the top face
-        g.fillRect (skirt.getX(), centre.y, skirt.getWidth(), height);
-        juce::Path skirtPath;
-        skirtPath.addEllipse (skirt);
-        g.setGradientFill ({ juce::Colour (0xff2a2c31), 0.0f, skirt.getY(), juce::Colour (0xff050506), 0.0f, skirt.getBottom(), false });
-        g.fillPath (skirtPath);
+        const float gripRadius = radius - 10.0f;
+        const auto grip = juce::Rectangle<float> (gripRadius * 2.0f, gripRadius * 2.0f).withCentre (centre);
+        juce::Path gripPath;
+        gripPath.addEllipse (grip);
+        juce::DropShadow (juce::Colours::black.withAlpha (0.85f), 20, { 0, 10 }).drawForPath (g, gripPath); // cast shadow
+        juce::DropShadow (juce::Colours::black.withAlpha (0.9f), 4, { 0, 2 }).drawForPath (g, gripPath);    // contact shadow
+        g.setGradientFill ({ juce::Colour (0xff383a41), 0.0f, grip.getY(), juce::Colour (0xff070708), 0.0f, grip.getBottom(), false });
+        g.fillPath (gripPath);
         for (int i = 0; i < 48; ++i) // knurling
         {
             const float angle = juce::MathConstants<float>::twoPi * (float) i / 48.0f;
             g.setColour ((i % 2 == 0 ? juce::Colours::white : juce::Colours::black).withAlpha (0.10f));
-            g.drawLine ({ centre.getPointOnCircumference (outer - 5.0f, angle), centre.getPointOnCircumference (outer - 0.5f, angle) }, 1.2f);
+            g.drawLine ({ centre.getPointOnCircumference (gripRadius - 5.0f, angle), centre.getPointOnCircumference (gripRadius - 0.5f, angle) }, 1.2f);
         }
+        g.setGradientFill ({ juce::Colours::white.withAlpha (0.34f), 0.0f, grip.getY(), juce::Colours::transparentWhite, 0.0f, grip.getCentreY(), false });
+        g.drawEllipse (grip.reduced (0.5f), 1.0f); // light catching the top rim
 
-        const float capRadius = outer - 6.0f;
+        const float capRadius = gripRadius - 6.0f;
         const auto cap = juce::Rectangle<float> (capRadius * 2.0f, capRadius * 2.0f).withCentre (centre);
-        g.setColour (juce::Colours::black.withAlpha (0.7f)); // the cap is raised off the knurled ring
-        g.fillEllipse (cap.translated (0.0f, 3.5f).expanded (1.0f));
-        g.setGradientFill ({ juce::Colour (0xff50535c), 0.0f, cap.getY(), juce::Colour (0xff101113), 0.0f, cap.getBottom(), false });
+        g.setColour (juce::Colours::black.withAlpha (0.8f)); // groove between grip and cap
+        g.fillEllipse (cap.expanded (1.5f));
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff5c5f68), centre.x - capRadius * 0.35f, centre.y - capRadius * 0.5f,
+                                                 juce::Colour (0xff131417), centre.x + capRadius * 0.6f, centre.y + capRadius * 0.95f, true)); // domed, lit from above
         g.fillEllipse (cap);
-        {
-            juce::Graphics::ScopedSaveState clip (g); // spun-metal highlights
-            juce::Path capPath;
-            capPath.addEllipse (cap);
-            g.reduceClipRegion (capPath);
-            for (const float at : { -0.75f, 2.4f })
-            {
-                juce::Path wedge;
-                wedge.addPieSegment (cap.expanded (4.0f), at - 0.32f, at + 0.32f, 0.0f);
-                g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.0f), centre.x, centre.y,
-                                                         juce::Colours::white.withAlpha (0.13f), centre.getPointOnCircumference (capRadius, at).x, centre.getPointOnCircumference (capRadius, at).y, true));
-                g.fillPath (wedge);
-            }
-        }
-        g.setColour (juce::Colours::black.withAlpha (0.55f));
-        g.drawEllipse (cap, 1.0f);
-        g.setColour (juce::Colours::white.withAlpha (0.16f));
-        g.drawEllipse (cap.reduced (1.0f), 0.6f);
+        g.setGradientFill ({ juce::Colours::white.withAlpha (0.24f), 0.0f, cap.getY(), juce::Colours::transparentWhite, 0.0f, cap.getCentreY(), false });
+        g.drawEllipse (cap.reduced (0.5f), 1.0f);
 
         const float angle = startAngle + position * (endAngle - startAngle);
-        const juce::Line<float> pointer (centre.getPointOnCircumference (capRadius * 0.30f, angle), centre.getPointOnCircumference (capRadius - 3.0f, angle));
-        g.setColour (juce::Colours::black.withAlpha (0.8f));
-        g.drawLine (pointer, 4.5f);
+        juce::Path pointer;
+        pointer.startNewSubPath (centre.getPointOnCircumference (capRadius * 0.38f, angle));
+        pointer.lineTo (centre.getPointOnCircumference (capRadius - 4.0f, angle));
+        g.setColour (juce::Colours::black.withAlpha (0.75f));
+        g.strokePath (pointer, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         g.setColour (accent.withAlpha (alpha));
-        g.drawLine (pointer, 2.4f);
+        g.strokePath (pointer, juce::PathStrokeType (2.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
+    // A physical key in a well: it has thickness, and sits lower when lit or held
     void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour&, bool over, bool down) override
     {
         const bool on = button.getToggleState();
+        const auto well = button.getLocalBounds().toFloat().reduced (3.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.92f));
+        g.fillRoundedRectangle (well, 6.0f);
 
-        if (hardware) // a physical key in a well: it has thickness, and sits lower when lit
-        {
-            const auto well = button.getLocalBounds().toFloat().reduced (3.0f);
-            g.setColour (juce::Colours::black.withAlpha (0.92f));
-            g.fillRoundedRectangle (well, 6.0f);
-
-            const auto top = on || down ? well.reduced (1.5f).withTrimmedTop (2.5f) : well.reduced (1.5f).withTrimmedBottom (4.0f);
-            juce::Path key;
-            key.addRoundedRectangle (top, 5.0f);
-            if (on)
-                juce::DropShadow (accent.withAlpha (0.5f), 10, {}).drawForPath (g, key);
-            const auto colour = on ? accent : face (over);
-            g.setGradientFill ({ colour.brighter (on ? 0.25f : 0.18f), 0.0f, top.getY(), colour.darker (on ? 0.15f : 0.35f), 0.0f, top.getBottom(), false });
-            g.fillPath (key);
-            g.setGradientFill ({ juce::Colours::white.withAlpha (0.30f), 0.0f, top.getY(), juce::Colours::transparentWhite, 0.0f, top.getY() + 7.0f, false });
-            g.strokePath (key, juce::PathStrokeType (1.0f));
-            return;
-        }
-
-        const auto area = button.getLocalBounds().toFloat().reduced (3.0f, 4.0f);
-        juce::Path outline;
-        outline.addRoundedRectangle (area, 6.0f);
+        const auto top = on || down ? well.reduced (1.5f).withTrimmedTop (2.5f) : well.reduced (1.5f).withTrimmedBottom (4.0f);
+        juce::Path key;
+        key.addRoundedRectangle (top, 5.0f);
         if (on)
-        {
-            juce::DropShadow (accent.withAlpha (0.45f), 8, {}).drawForPath (g, outline); // glow
-            g.setGradientFill ({ accent.brighter (0.25f), 0.0f, area.getY(), accent.darker (0.15f), 0.0f, area.getBottom(), false });
-        }
-        else
-        {
-            if (! down)
-                smallShadow.drawForPath (g, outline);
-            const auto top = face (over);
-            g.setGradientFill ({ top, 0.0f, area.getY(), top.darker (0.25f), 0.0f, area.getBottom(), false });
-        }
-        g.fillPath (outline);
-        g.setGradientFill ({ juce::Colours::white.withAlpha (0.16f), 0.0f, area.getY(), juce::Colours::transparentWhite, 0.0f, area.getCentreY(), false });
-        g.strokePath (outline, juce::PathStrokeType (1.0f));
+            juce::DropShadow (accent.withAlpha (0.5f), 10, {}).drawForPath (g, key);
+        const auto colour = on ? accent : over ? keyHover : keyFace;
+        g.setGradientFill ({ colour.brighter (on ? 0.25f : 0.18f), 0.0f, top.getY(), colour.darker (on ? 0.15f : 0.35f), 0.0f, top.getBottom(), false });
+        g.fillPath (key);
+        g.setGradientFill ({ juce::Colours::white.withAlpha (0.30f), 0.0f, top.getY(), juce::Colours::transparentWhite, 0.0f, top.getY() + 7.0f, false });
+        g.strokePath (key, juce::PathStrokeType (1.0f));
     }
 };
 
@@ -364,16 +278,11 @@ public:
             juce::Path outline;
             outline.addRoundedRectangle (area, 6.0f);
 
-            if (hardware) // tiles have thickness too
-            {
-                g.setColour (juce::Colours::black.withAlpha (0.9f));
-                g.fillRoundedRectangle (area.translated (0.0f, on ? 1.0f : 3.5f), 6.0f);
-            }
+            g.setColour (juce::Colours::black.withAlpha (0.9f)); // tiles have thickness, and sit lower when chosen
+            g.fillRoundedRectangle (area.translated (0.0f, on ? 1.0f : 3.5f), 6.0f);
             if (on)
                 juce::DropShadow (accent.withAlpha (0.35f), 8, {}).drawForPath (g, outline);
-            else
-                smallShadow.drawForPath (g, outline);
-            const auto top = on ? accent.withMultipliedBrightness (0.32f) : face (i == hovered);
+            const auto top = on ? accent.withMultipliedBrightness (0.32f) : i == hovered ? keyHover : keyFace;
             g.setGradientFill ({ top, 0.0f, area.getY(), top.darker (0.3f), 0.0f, area.getBottom(), false });
             g.fillPath (outline);
             g.setColour (on ? accent : juce::Colours::white.withAlpha (0.07f));
@@ -490,15 +399,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        if (hardware)
-        {
-            drawMetal (g, getLocalBounds().toFloat(), juce::Colour (0xff111214));
-        }
-        else
-        {
-            g.setGradientFill ({ bgTop, 0.0f, 0.0f, bgBottom, 0.0f, (float) getHeight(), false });
-            g.fillAll();
-        }
+        drawMetal (g, getLocalBounds().toFloat(), panel);
 
         drawWordmark (g, *fonts, { 20.0f, 16.0f, 200.0f, 28.0f });
 
@@ -564,21 +465,18 @@ private:
     void paintScreen (juce::Graphics& g)
     {
         const auto frame = screen.toFloat();
-        if (hardware) // a raised bezel around the glass
-        {
-            const auto bezel = frame.expanded (7.0f);
-            g.setGradientFill ({ juce::Colour (0xff040405), 0.0f, bezel.getY(), juce::Colour (0xff2a2c31), 0.0f, bezel.getBottom(), false });
-            g.fillRoundedRectangle (bezel, 15.0f);
-        }
+        const auto bezel = frame.expanded (7.0f); // a raised rim around the glass
+        g.setGradientFill ({ juce::Colour (0xff040405), 0.0f, bezel.getY(), juce::Colour (0xff2a2c31), 0.0f, bezel.getBottom(), false });
+        g.fillRoundedRectangle (bezel, 15.0f);
         g.setGradientFill ({ screenTop, 0.0f, frame.getY(), screenBottom, 0.0f, frame.getBottom(), false });
         g.fillRoundedRectangle (frame, 10.0f);
         {
-            juce::Graphics::ScopedSaveState clip (g); // inner shadow along the top edge
+            juce::Graphics::ScopedSaveState clip (g); // the glass sits deep: a long shadow falls from the top edge
             juce::Path outline;
             outline.addRoundedRectangle (frame, 10.0f);
             g.reduceClipRegion (outline);
-            const float depth = hardware ? 52.0f : 22.0f;
-            g.setGradientFill ({ juce::Colours::black.withAlpha (hardware ? 0.9f : 0.7f), 0.0f, frame.getY(), juce::Colours::transparentBlack, 0.0f, frame.getY() + depth, false });
+            const float depth = 52.0f;
+            g.setGradientFill ({ juce::Colours::black.withAlpha (0.9f), 0.0f, frame.getY(), juce::Colours::transparentBlack, 0.0f, frame.getY() + depth, false });
             g.fillRect (frame.withHeight (depth));
         }
         g.setGradientFill ({ juce::Colours::black.withAlpha (0.6f), 0.0f, frame.getY(), juce::Colours::white.withAlpha (0.10f), 0.0f, frame.getBottom(), false });
@@ -634,8 +532,7 @@ private:
         g.setColour (accent);
         g.strokePath (curve, juce::PathStrokeType (2.2f, joint));
 
-        if (hardware) // glare across the glass
-        {
+        {   // glare across the glass
             juce::Graphics::ScopedSaveState clip (g);
             juce::Path glass;
             glass.addRoundedRectangle (frame, 10.0f);
