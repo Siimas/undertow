@@ -1,7 +1,8 @@
 name: release
 on:
   push:
-    tags: ["v*"]
+    branches: [main] # builds and tests, and keeps the build cache warm for releases
+    tags: ["v*"]     # also publishes the installers
 
 permissions:
   contents: read
@@ -24,6 +25,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # Compiled JUCE is reused between runs; only Pump's own files rebuild.
+      - uses: actions/cache@v4
+        with:
+          path: build
+          key: build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build -C Release --output-on-failure
@@ -48,6 +54,7 @@ jobs:
   # Only this job can write to the repo, and it runs nothing but gh.
   release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write

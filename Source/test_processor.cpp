@@ -3,8 +3,6 @@
 #include <cassert>
 #include "PumpProcessor.h"
 
-juce::AudioProcessorEditor* PumpProcessor::createEditor() { return nullptr; }
-
 namespace
 {
 constexpr double sampleRate = 44100.0;

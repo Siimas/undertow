@@ -7,6 +7,9 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 project(Pump VERSION 1.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
+if(MSVC)
+    add_compile_options(/MP) # compile files in parallel
+endif()
 
 include(FetchContent)
 FetchContent_Declare(JUCE
@@ -37,9 +40,10 @@ enable_testing()
 add_executable(duck_test Source/test_duck.cpp)
 add_test(NAME duck_test COMMAND duck_test)
 
-# Runs audio through the real processor, no host needed
-juce_add_console_app(processor_test)
-target_sources(processor_test PRIVATE Source/test_processor.cpp)
-target_compile_definitions(processor_test PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
-target_link_libraries(processor_test PRIVATE juce::juce_audio_processors juce::juce_dsp)
+# Runs audio through the real processor, no host needed. Links the plugin's own
+# static library so JUCE is compiled once, not once per target.
+add_executable(processor_test Source/test_processor.cpp)
+target_link_libraries(processor_test PRIVATE Pump)
+target_include_directories(processor_test PRIVATE $<TARGET_PROPERTY:Pump,INCLUDE_DIRECTORIES>)
+target_compile_definitions(processor_test PRIVATE $<TARGET_PROPERTY:Pump,COMPILE_DEFINITIONS>)
 add_test(NAME processor_test COMMAND processor_test)
