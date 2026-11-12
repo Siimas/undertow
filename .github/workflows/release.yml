@@ -3,6 +3,7 @@ on:
   push:
     branches: [main] # builds and tests, and keeps the build cache warm for releases
     tags: ["v*"]     # also publishes the installers
+  pull_request:      # builds and tests proposed changes; never publishes
 
 permissions:
   contents: read
@@ -33,6 +34,8 @@ jobs:
       # Never ship anything left over from a cached run: the plugin itself is always relinked.
       - run: rm -rf build/Undertow_artefacts
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      # The JUCE tag must still point at the commit this project was written against
+      - run: test "$(git -C build/_deps/juce-src rev-parse HEAD)" = "f72bad64d29715216226685810c5196bd0d79d77"
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build -C Release --output-on-failure
 
