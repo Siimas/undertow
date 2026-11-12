@@ -12,11 +12,9 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            zip: zip -r Pump-macOS.zip Pump.vst3
-            file: Pump-macOS.zip
+            file: Pump-macOS-Installer.pkg
           - os: windows-latest
-            zip: 7z a Pump-Windows.zip Pump.vst3
-            file: Pump-Windows.zip
+            file: Pump-Windows-Installer.exe
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -26,10 +24,24 @@ jobs:
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build -C Release --output-on-failure
-      - run: cd build/Pump_artefacts/Release/VST3 && ${{ matrix.zip }}
+
+      - name: Mac installer
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p pkgroot/Library/Audio/Plug-Ins/VST3
+          cp -R build/Pump_artefacts/Release/VST3/Pump.vst3 pkgroot/Library/Audio/Plug-Ins/VST3/
+          pkgbuild --root pkgroot --install-location / --identifier com.flplugins.pump \
+            --version "${GITHUB_REF_NAME#v}" "${{ matrix.file }}"
+
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          choco install innosetup -y --no-progress
+          iscc installer.iss
+
       # Token only on the release step, not visible to the build
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --generate-notes || true
-          gh release upload "$GITHUB_REF_NAME" "build/Pump_artefacts/Release/VST3/${{ matrix.file }}" --clobber
+          gh release upload "$GITHUB_REF_NAME" "${{ matrix.file }}" --clobber
