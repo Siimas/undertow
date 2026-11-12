@@ -14,8 +14,8 @@ endif()
 include(FetchContent)
 FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG 8.0.9
-    GIT_SHALLOW TRUE)
+    # JUCE 8.0.9, pinned to its exact commit so a moved tag can never change what gets built
+    GIT_TAG f72bad64d29715216226685810c5196bd0d79d77)
 FetchContent_MakeAvailable(JUCE)
 
 juce_add_plugin(Undertow
