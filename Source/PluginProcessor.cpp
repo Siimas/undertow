@@ -1,11 +1,38 @@
-#include "PumpProcessor.h"
+#include "UndertowProcessor.h"
 #include "Version.h"
+#include <BinaryData.h>
 
 namespace
 {
 const juce::Colour bgTop { 0xff1c1f29 }, bgBottom { 0xff0d0f14 }, card { 0xff222632 }, cardLow { 0xff1a1d27 },
     raised { 0xff2c3140 }, raisedHover { 0xff363c4d }, screenTop { 0xff0a0b0f }, screenBottom { 0xff12141b },
     accent { 0xff3ddc97 }, text { 0xffe6e9ef }, dim { 0xff7d8698 };
+
+// Space Grotesk, bundled. Shared by everything that draws text and freed with the last editor.
+struct Fonts
+{
+    juce::Typeface::Ptr medium = juce::Typeface::createSystemTypefaceFor (BinaryData::SpaceGroteskMedium_ttf, BinaryData::SpaceGroteskMedium_ttfSize),
+                        bold = juce::Typeface::createSystemTypefaceFor (BinaryData::SpaceGroteskBold_ttf, BinaryData::SpaceGroteskBold_ttfSize);
+
+    juce::FontOptions get (float height, bool heavy = false) const { return juce::FontOptions (heavy ? bold : medium).withHeight (height); }
+};
+
+// The mark: a surface line that gets pulled under and climbs back out
+void drawLogo (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    juce::Path tile;
+    tile.addRoundedRectangle (area, area.getWidth() * 0.26f);
+    g.setGradientFill ({ accent.brighter (0.3f), area.getX(), area.getY(), accent.darker (0.4f), area.getRight(), area.getBottom(), false });
+    g.fillPath (tile);
+
+    const auto at = [&] (float x, float y) { return juce::Point<float> (area.getX() + x * area.getWidth(), area.getY() + y * area.getHeight()); };
+    juce::Path wave;
+    wave.startNewSubPath (at (0.17f, 0.32f));
+    wave.cubicTo (at (0.19f, 0.86f), at (0.42f, 0.86f), at (0.50f, 0.54f));
+    wave.cubicTo (at (0.58f, 0.24f), at (0.70f, 0.32f), at (0.83f, 0.32f));
+    g.setColour (bgBottom);
+    g.strokePath (wave, juce::PathStrokeType (area.getWidth() * 0.11f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
 
 const juce::DropShadow cardShadow { juce::Colours::black.withAlpha (0.55f), 16, { 0, 6 } };
 const juce::DropShadow smallShadow { juce::Colours::black.withAlpha (0.5f), 6, { 0, 2 } };
@@ -38,14 +65,23 @@ juce::Path shapePath (juce::Rectangle<float> area, int shape, float mix, float s
     return path;
 }
 
-struct PumpLook : juce::LookAndFeel_V4
+struct UndertowLook : juce::LookAndFeel_V4
 {
-    PumpLook()
+    UndertowLook()
     {
         setColour (juce::Slider::textBoxTextColourId, text);
         setColour (juce::TextButton::textColourOffId, dim);
         setColour (juce::TextButton::textColourOnId, bgBottom);
+        setColour (juce::PopupMenu::backgroundColourId, card);
+        setColour (juce::PopupMenu::textColourId, text);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, accent);
+        setColour (juce::PopupMenu::highlightedTextColourId, bgBottom);
     }
+
+    juce::SharedResourcePointer<Fonts> fonts;
+    juce::Font getTextButtonFont (juce::TextButton&, int height) override { return juce::Font (fonts->get (juce::jmin (15.0f, (float) height * 0.5f))); }
+    juce::Font getLabelFont (juce::Label&) override { return juce::Font (fonts->get (14.0f)); }
+    juce::Font getPopupMenuFont() override { return juce::Font (fonts->get (15.0f)); }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float position,
                            float startAngle, float endAngle, juce::Slider& slider) override
@@ -107,20 +143,37 @@ struct PumpLook : juce::LookAndFeel_V4
 // Sends nothing but the request itself. The reply is only ever parsed as a version number.
 struct UpdateCheck : juce::Thread
 {
-    UpdateCheck() : Thread ("Pump update check") { startThread(); }
-    ~UpdateCheck() override { stopThread (4000); }
+    UpdateCheck() : Thread ("Undertow update check")
+    {
+        stream.withConnectionTimeout (3000).withExtraHeaders ("User-Agent: Undertow\r\nAccept: application/vnd.github+json");
+        startThread();
+    }
+
+    ~UpdateCheck() override
+    {
+        // Never force-kill the thread (that corrupts the host): cancel the request, then wait for a clean exit.
+        signalThreadShouldExit();
+        stream.cancel();
+        stopThread (-1);
+    }
 
     void run() override
     {
-        const auto options = juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)
-                                 .withConnectionTimeoutMs (3000)
-                                 .withExtraHeaders ("User-Agent: Pump\r\nAccept: application/vnd.github+json");
-        auto stream = juce::URL ("https://api.github.com/repos/Siimas/pump/releases/latest").createInputStream (options);
-        if (stream == nullptr || threadShouldExit())
+        if (! stream.connect (nullptr))
             return;
 
-        juce::MemoryBlock reply;
-        stream->readIntoMemoryBlock (reply, 256 * 1024);
+        juce::MemoryOutputStream reply;
+        char chunk[4096];
+        while (! threadShouldExit() && reply.getDataSize() < 256 * 1024)
+        {
+            const int got = stream.read (chunk, (int) sizeof (chunk));
+            if (got <= 0)
+                break;
+            reply.write (chunk, (size_t) got);
+        }
+        if (threadShouldExit())
+            return;
+
         const Version found (juce::JSON::parse (reply.toString())["tag_name"].toString().toStdString());
         if (found.newerThan (Version (JucePlugin_VersionString)))
         {
@@ -129,6 +182,7 @@ struct UpdateCheck : juce::Thread
         }
     }
 
+    juce::WebInputStream stream { juce::URL ("https://api.github.com/repos/Siimas/undertow/releases/latest"), false };
     juce::String latest; // written before `available` is set, read only after
     std::atomic<bool> available { false };
 };
@@ -215,7 +269,7 @@ public:
             g.setColour (on ? accent : text.withAlpha (0.6f));
             g.strokePath (shapePath (inner.reduced (0.0f, 2.0f), i, 1.0f, 0.0f, 1.0f), juce::PathStrokeType (1.6f));
             g.setColour (on ? text : dim);
-            g.setFont (juce::FontOptions (10.0f));
+            g.setFont (fonts->get (10.0f));
             g.drawText (shapes[i].name, name, juce::Justification::centredBottom);
         }
     }
@@ -260,30 +314,22 @@ private:
     }
 
     int hovered = -1;
+    juce::SharedResourcePointer<Fonts> fonts;
     juce::ParameterAttachment attachment; // last: its callback uses the members above
 };
 }
 
 //==============================================================================
-class PumpEditor : public juce::AudioProcessorEditor, private juce::Timer
+class UndertowEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
     using APVTS = juce::AudioProcessorValueTreeState;
 
 public:
-    explicit PumpEditor (PumpProcessor& p)
+    explicit UndertowEditor (UndertowProcessor& p)
         : AudioProcessorEditor (p), proc (p),
           grid (*p.params.getParameter ("shape")),
           rate (*p.params.getParameter ("rate")), trigger (*p.params.getParameter ("trigger"))
     {
-        // System typefaces, so nothing has to be bundled. Text drawn in paint() resolves its
-        // font through the default look-and-feel, so set it there as well as on ours.
-       #if JUCE_MAC
-        const char* typeface = "Avenir Next";
-       #else
-        const char* typeface = "Segoe UI";
-       #endif
-        juce::LookAndFeel::getDefaultLookAndFeel().setDefaultSansSerifTypefaceName (typeface);
-        look.setDefaultSansSerifTypefaceName (typeface);
         setLookAndFeel (&look);
 
         grid.onChange = [this] { repaint(); };
@@ -296,38 +342,49 @@ public:
         addKnob (thresh, "thresh", " dB");
         addKnob (xover, "xover", " Hz");
 
-        band.setClickingTogglesState (true);
-        bandLink = std::make_unique<APVTS::ButtonAttachment> (p.params, "band", band);
+        for (auto [button, id] : { std::pair<juce::Button*, const char*> { &band, "band" }, { &loop, "loop" }, { &listen, "listen" } })
+        {
+            button->setClickingTogglesState (true);
+            buttonLinks.add (new APVTS::ButtonAttachment (p.params, id, *button));
+        }
+        menu.onClick = [this] { showMenu(); };
 
-        for (auto* c : std::initializer_list<juce::Component*> { &grid, &previous, &next, &rate, &trigger, &band })
+        for (auto* c : std::initializer_list<juce::Component*> { &grid, &previous, &next, &rate, &trigger, &band, &loop, &listen, &menu })
             addAndMakeVisible (c);
 
         // Hidden until a newer release is found; opens the download page (fixed address, never one from the network)
         addChildComponent (update);
         update.setToggleState (true, juce::dontSendNotification);
-        update.onClick = [] { juce::URL ("https://github.com/Siimas/pump/releases/latest").launchInDefaultBrowser(); };
+        update.onClick = [] { juce::URL ("https://github.com/Siimas/undertow/releases/latest").launchInDefaultBrowser(); };
 
         setSize (740, 640);
+        userScale = juce::jlimit (1.0f, 2.0f, finiteOr ((float) p.params.state.getProperty ("uiScale", 1.0f), 1.0f));
+        setScaleFactor (1.0f);
         timerCallback();
         startTimerHz (30);
     }
 
-    ~PumpEditor() override { setLookAndFeel (nullptr); }
+    ~UndertowEditor() override { setLookAndFeel (nullptr); }
+
+    // Hosts call this with the screen's scale; the user's chosen window size multiplies it.
+    void setScaleFactor (float scale) override
+    {
+        hostScale = scale;
+        AudioProcessorEditor::setScaleFactor (hostScale * userScale);
+    }
 
     void paint (juce::Graphics& g) override
     {
         g.setGradientFill ({ bgTop, 0.0f, 0.0f, bgBottom, 0.0f, (float) getHeight(), false });
         g.fillAll();
 
-        g.setColour (accent);
-        g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
-        g.drawText ("PUMP", 22, 14, 90, 32, juce::Justification::centredLeft);
-        g.setColour (dim);
-        g.setFont (juce::FontOptions (11.0f));
-        g.drawText ("VOLUME SHAPER", 100, 21, 140, 20, juce::Justification::centredLeft);
+        drawLogo (g, { 20.0f, 14.0f, 32.0f, 32.0f });
+        g.setColour (text);
+        g.setFont (fonts->get (22.0f, true).withKerningFactor (0.10f));
+        g.drawText ("UNDERTOW", 62, 14, 170, 32, juce::Justification::centredLeft);
 
         g.setColour (text);
-        g.setFont (juce::FontOptions (15.0f));
+        g.setFont (fonts->get (15.0f));
         g.drawText (shapes[grid.selected].name, previous.getRight(), previous.getY(), next.getX() - previous.getRight(), previous.getHeight(),
                     juce::Justification::centred);
 
@@ -336,15 +393,15 @@ public:
         drawCard (g, controlCard.toFloat());
 
         g.setColour (dim);
-        g.setFont (juce::FontOptions (11.0f));
+        g.setFont (fonts->get (11.0f));
         for (auto [component, label] : { std::pair<juce::Component*, const char*> { &rate, "RATE" }, { &trigger, "TRIGGER" },
                                          { &mix, "MIX" }, { &shift, "SHIFT" }, { &length, "LENGTH" },
                                          { &thresh, "THRESHOLD" }, { &xover, "CROSSOVER" }, { &band, "BAND SPLIT" } })
             g.drawText (label, component->getX(), component->getY() - 17, component->getWidth(), 14, juce::Justification::centred);
 
         g.setColour (dim.withAlpha (0.6f));
-        g.setFont (juce::FontOptions (10.0f));
-        g.drawText ("Pump " JucePlugin_VersionString "  |  Free software, AGPL-3.0, no warranty  |  Built with JUCE  |  VST is a registered trademark of Steinberg Media Technologies GmbH",
+        g.setFont (fonts->get (10.0f));
+        g.drawText ("Undertow " JucePlugin_VersionString "  |  Free software, AGPL-3.0, no warranty  |  Built with JUCE  |  VST is a registered trademark of Steinberg Media Technologies GmbH",
                     0, getHeight() - 20, getWidth(), 14, juce::Justification::centred);
     }
 
@@ -354,8 +411,10 @@ public:
         area.removeFromBottom (12); // legal line
 
         auto header = area.removeFromTop (32);
-        update.setBounds (header.withTrimmedLeft (236).removeFromLeft (190));
-        header = header.removeFromRight (250);
+        update.setBounds (header.withTrimmedLeft (228).removeFromLeft (150));
+        menu.setBounds (header.removeFromRight (64));
+        header.removeFromRight (8);
+        header = header.removeFromRight (220);
         previous.setBounds (header.removeFromLeft (36));
         next.setBounds (header.removeFromRight (36));
 
@@ -364,12 +423,14 @@ public:
         controls.removeFromTop (18);
         auto row = controls.removeFromTop (36);
         rate.setBounds (row.removeFromLeft (row.getWidth() * 3 / 5).withTrimmedRight (12));
+        loop.setBounds (row.removeFromRight (64));
         trigger.setBounds (row.withTrimmedLeft (12));
         controls.removeFromTop (26);
         const int column = controls.getWidth() / 6;
         for (auto* knob : { &mix, &shift, &length, &thresh, &xover })
             knob->setBounds (controls.removeFromLeft (column));
-        band.setBounds (controls.withSizeKeepingCentre (104, 36));
+        band.setBounds (controls.withSizeKeepingCentre (104, 34).translated (0, -12));
+        listen.setBounds (controls.withSizeKeepingCentre (104, 30).translated (0, 24));
 
         area.removeFromBottom (14);
         gridCard = area.removeFromBottom (124);
@@ -413,8 +474,8 @@ private:
         if (running) // output level across the cycle, mirrored around the middle
         {
             juce::Path wave;
-            const float mid = plot.getCentreY(), step = plot.getWidth() / (float) PumpProcessor::scopeSize;
-            for (int i = 0; i < PumpProcessor::scopeSize; ++i)
+            const float mid = plot.getCentreY(), step = plot.getWidth() / (float) UndertowProcessor::scopeSize;
+            for (int i = 0; i < UndertowProcessor::scopeSize; ++i)
             {
                 const float half = juce::jlimit (0.0f, 1.0f, proc.scope[(size_t) i].load()) * plot.getHeight() * 0.5f;
                 wave.addRectangle (plot.getX() + (float) i * step, mid - half, step + 0.5f, half * 2.0f);
@@ -456,13 +517,46 @@ private:
         xover.setEnabled (band.getToggleState());
         thresh.setEnabled (mode == audio);
         shift.setEnabled (mode == sync);
+        loop.setEnabled (mode != sync);
+        listen.setEnabled (band.getToggleState());
         band.setButtonText (band.getToggleState() ? "Low only" : "Full range");
         if (updates.available && ! update.isVisible())
         {
-            update.setButtonText ("Update " + updates.latest + " available");
+            update.setButtonText ("Update to " + updates.latest);
             update.setVisible (true);
         }
         repaint (screen);
+    }
+
+    void showMenu()
+    {
+        juce::PopupMenu sizes;
+        for (int percent : { 100, 125, 150, 200 })
+            sizes.addItem (percent, juce::String (percent) + "%", true, std::abs (userScale * 100.0f - (float) percent) < 1.0f);
+
+        juce::PopupMenu items;
+        items.setLookAndFeel (&look);
+        items.addSubMenu ("Window size", sizes);
+        items.addItem (1, "Manual");
+        items.addItem (2, "Get the latest version");
+        items.addSeparator();
+        items.addItem (3, "Undertow " JucePlugin_VersionString "  -  AGPL-3.0", false);
+        items.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menu),
+                             [safe = juce::Component::SafePointer<UndertowEditor> (this)] (int choice)
+                             {
+                                 if (safe == nullptr)
+                                     return;
+                                 if (choice >= 100)
+                                 {
+                                     safe->userScale = juce::jlimit (1.0f, 2.0f, (float) choice / 100.0f);
+                                     safe->proc.params.state.setProperty ("uiScale", safe->userScale, nullptr); // saved with the project
+                                     safe->setScaleFactor (safe->hostScale);
+                                 }
+                                 else if (choice == 1)
+                                     juce::URL ("https://github.com/Siimas/undertow#using-it").launchInDefaultBrowser();
+                                 else if (choice == 2)
+                                     juce::URL ("https://github.com/Siimas/undertow/releases/latest").launchInDefaultBrowser();
+                             });
     }
 
     void addKnob (juce::Slider& knob, const char* id, const char* suffix)
@@ -475,19 +569,21 @@ private:
         knob.setTextValueSuffix (suffix);
     }
 
-    PumpProcessor& proc;
-    PumpLook look; // before the controls, so it outlives them
+    UndertowProcessor& proc;
+    juce::SharedResourcePointer<Fonts> fonts;
+    UndertowLook look; // before the controls, so it outlives them
     ShapeGrid grid;
-    juce::TextButton previous { "<" }, next { ">" }, band, update;
+    juce::TextButton previous { "<" }, next { ">" }, band, update, loop { "Loop" }, listen { "Listen" }, menu { "Menu" };
+    float hostScale = 1.0f, userScale = 1.0f;
     Segmented rate, trigger;
     juce::Slider mix, shift, length, thresh, xover;
     juce::Rectangle<int> screen, gridCard, controlCard;
     // After the controls, so the attachments are destroyed first
-    std::unique_ptr<APVTS::ButtonAttachment> bandLink;
+    juce::OwnedArray<APVTS::ButtonAttachment> buttonLinks;
     juce::OwnedArray<APVTS::SliderAttachment> knobLinks;
     UpdateCheck updates; // last: started once everything else exists, stopped first
 };
 
-juce::AudioProcessorEditor* PumpProcessor::createEditor() { return new PumpEditor (*this); }
+juce::AudioProcessorEditor* UndertowProcessor::createEditor() { return new UndertowEditor (*this); }
 
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new PumpProcessor(); }
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new UndertowProcessor(); }

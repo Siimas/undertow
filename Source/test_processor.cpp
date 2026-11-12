@@ -1,14 +1,14 @@
 // Headless smoke test: pushes audio through the real processor in each trigger mode.
 #undef NDEBUG
 #include <cassert>
-#include "PumpProcessor.h"
+#include "UndertowProcessor.h"
 
 namespace
 {
 constexpr double sampleRate = 44100.0;
 constexpr int blockSize = 4096;
 
-void set (PumpProcessor& p, const char* id, float value)
+void set (UndertowProcessor& p, const char* id, float value)
 {
     auto* param = p.params.getParameter (id);
     param->setValueNotifyingHost (param->convertTo0to1 (value));
@@ -16,7 +16,7 @@ void set (PumpProcessor& p, const char* id, float value)
 
 // Runs one block of constant 1.0 (or a 5 kHz sine) and returns it. With no host playhead
 // the plugin free-runs at 120 bpm, so a 1/4 cycle is 22050 samples.
-juce::AudioBuffer<float> run (PumpProcessor& p, juce::MidiBuffer midi = {}, int sidechainHitAt = -1, bool sine = false)
+juce::AudioBuffer<float> run (UndertowProcessor& p, juce::MidiBuffer midi = {}, int sidechainHitAt = -1, bool sine = false)
 {
     juce::AudioBuffer<float> buffer (p.getTotalNumInputChannels(), blockSize);
     buffer.clear();
@@ -29,9 +29,9 @@ juce::AudioBuffer<float> run (PumpProcessor& p, juce::MidiBuffer midi = {}, int 
     return buffer;
 }
 
-std::unique_ptr<PumpProcessor> make (bool withSidechain = false)
+std::unique_ptr<UndertowProcessor> make (bool withSidechain = false)
 {
-    auto p = std::make_unique<PumpProcessor>();
+    auto p = std::make_unique<UndertowProcessor>();
     if (withSidechain)
     {
         auto layout = p->getBusesLayout();
@@ -119,6 +119,29 @@ int main()
         assert (run (*p).getSample (0, 500) < 0.1f);
         assert (p->displayPhase.load() < 1.0f);
         p->setPlayHead (nullptr);
+    }
+    {   // Loop: a MIDI-triggered cycle plays once by default, and keeps repeating with Loop on
+        for (const bool loop : { false, true })
+        {
+            auto p = make();
+            set (*p, "trigger", (float) midi);
+            set (*p, "loop", loop ? 1.0f : 0.0f);
+            juce::MidiBuffer note;
+            note.addEvent (juce::MidiMessage::noteOn (1, 60, 1.0f), 0);
+            run (*p, note);
+            for (int i = 0; i < 4; ++i)
+                run (*p);
+            // block 6 covers samples 20480..24575; the second cycle would start at 22050 (sample 1570 here)
+            const float secondCycle = run (*p).getSample (0, 2200);
+            assert (loop ? secondCycle < 0.1f : secondCycle > 0.999f);
+        }
+    }
+    {   // Band listen: only the ducked low band is heard, so a 5 kHz tone disappears
+        auto p = make();
+        set (*p, "shape", 12.0f);
+        set (*p, "band", 1.0f);
+        set (*p, "listen", 1.0f);
+        assert (run (*p, {}, -1, true).getRMSLevel (0, 15000 - 12288 < 0 ? 0 : 1000, 3000) < 0.05f);
     }
     {   // Band split: a 5 kHz tone is ducked normally, but left alone with "low band only"
         auto full = make();

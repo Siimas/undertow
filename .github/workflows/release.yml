@@ -14,9 +14,9 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            file: Pump-macOS-Installer.pkg
+            file: Undertow-macOS-Installer.pkg
           - os: windows-latest
-            file: Pump-Windows-Installer.exe
+            file: Undertow-Windows-Installer.exe
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -25,13 +25,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # Compiled JUCE is reused between runs; only Pump's own files rebuild.
+      # Compiled JUCE is reused between runs; only Undertow's own files rebuild.
       - uses: actions/cache@v4
         with:
           path: build
           key: build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
       # Never ship anything left over from a cached run: the plugin itself is always relinked.
-      - run: rm -rf build/Pump_artefacts
+      - run: rm -rf build/Undertow_artefacts
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build -C Release --output-on-failure
@@ -40,8 +40,8 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p pkgroot/Library/Audio/Plug-Ins/VST3
-          cp -R build/Pump_artefacts/Release/VST3/Pump.vst3 pkgroot/Library/Audio/Plug-Ins/VST3/
-          pkgbuild --root pkgroot --install-location / --identifier com.flplugins.pump \
+          cp -R build/Undertow_artefacts/Release/VST3/Undertow.vst3 pkgroot/Library/Audio/Plug-Ins/VST3/
+          pkgbuild --root pkgroot --install-location / --identifier com.flplugins.undertow \
             --version "${GITHUB_REF_NAME#v}" "${{ matrix.file }}"
 
       - name: Windows installer
@@ -67,4 +67,4 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" Pump-macOS-Installer.pkg Pump-Windows-Installer.exe --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" Undertow-macOS-Installer.pkg Undertow-Windows-Installer.exe --generate-notes

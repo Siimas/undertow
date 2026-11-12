@@ -30,10 +30,10 @@ float finiteOr (float v, float fallback) { return std::isfinite (v) ? v : fallba
 }
 
 //==============================================================================
-class PumpProcessor : public juce::AudioProcessor
+class UndertowProcessor : public juce::AudioProcessor
 {
 public:
-    PumpProcessor()
+    UndertowProcessor()
         : AudioProcessor (BusesProperties()
                               .withInput ("Input", juce::AudioChannelSet::stereo())
                               .withOutput ("Output", juce::AudioChannelSet::stereo())
@@ -52,7 +52,9 @@ public:
                     std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "shift", 1 }, "Shift",
                                                                  juce::NormalisableRange<float> (-25.0f, 25.0f, 0.1f), 0.0f),
                     std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "length", 1 }, "Length",
-                                                                 juce::NormalisableRange<float> (10.0f, 100.0f, 0.1f), 100.0f) })
+                                                                 juce::NormalisableRange<float> (10.0f, 100.0f, 0.1f), 100.0f),
+                    std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "loop", 1 }, "Loop After Trigger", false),
+                    std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "listen", 1 }, "Band Listen", false) })
     {
     }
 
@@ -65,6 +67,7 @@ public:
         gain = 1.0f;
         env = 0.0f;
         armed = true;
+        triggered = false;
         oneShot = 1.0;
         crossover.prepare ({ sampleRate, (juce::uint32) blockSize, 2 });
         crossover.reset();
@@ -85,7 +88,7 @@ public:
                 if (auto b = pos->getBpm(); b && *b > 0.0)
                     bpm = *b;
                 // Lock to the song position while playing; free-run from wherever we were when stopped.
-                if (auto ppq = pos->getPpqPosition(); ppq && pos->getIsPlaying())
+                if (auto ppq = pos->getPpqPosition(); ppq && std::isfinite (*ppq) && pos->getIsPlaying())
                     beats = *ppq;
             }
 
@@ -97,6 +100,8 @@ public:
         const double shift = juce::jlimit (-25.0f, 25.0f, finiteOr (shiftParam->load(), 0.0f)) / 100.0;
         const float length = juce::jlimit (10.0f, 100.0f, finiteOr (lengthParam->load(), 100.0f)) / 100.0f;
         const bool split = bandParam->load() > 0.5f;
+        const bool listen = split && listenParam->load() > 0.5f; // hear only the band being ducked
+        const bool loop = loopParam->load() > 0.5f && ! stopped; // a triggered cycle keeps repeating while the song plays
         const float threshold = juce::Decibels::decibelsToGain (juce::jlimit (-48.0f, 0.0f, finiteOr (threshParam->load(), -18.0f)));
         crossover.setCutoffFrequency (juce::jlimit (40.0f, 2000.0f, finiteOr (xoverParam->load(), 200.0f)));
 
@@ -109,7 +114,10 @@ public:
             // Retrigger sources restart a one-shot cycle
             for (; midiEvent != midiIn.end() && (*midiEvent).samplePosition <= i; ++midiEvent)
                 if (mode == midi && (*midiEvent).getMessage().isNoteOn())
+                {
                     oneShot = 0.0;
+                    triggered = true;
+                }
 
             float level = 0.0f;
             for (int ch = 0; ch < side.getNumChannels(); ++ch)
@@ -119,7 +127,10 @@ public:
             {
                 armed = false;
                 if (mode == audio)
+                {
                     oneShot = 0.0;
+                    triggered = true;
+                }
             }
             else if (env < threshold * 0.5f)
                 armed = true; // re-arm once the hit has died away
@@ -128,7 +139,9 @@ public:
             if (mode != sync)
             {
                 position = phase = (float) oneShot;
-                oneShot = juce::jmin (1.0, oneShot + beatsPerSample / cycle);
+                oneShot += beatsPerSample / cycle;
+                if (oneShot >= 1.0)
+                    oneShot = loop && triggered ? oneShot - 1.0 : 1.0;
             }
             else if (stopped)
                 position = 1.0f; // transport stopped: leave the audio alone
@@ -147,7 +160,7 @@ public:
                 float* data = main.getWritePointer (ch);
                 float low = 0.0f, high = 0.0f;
                 crossover.processSample (ch, data[i], low, high); // always running so the toggle never clicks
-                data[i] = split ? low * gain + high : data[i] * gain;
+                data[i] = listen ? low * gain : split ? low * gain + high : data[i] * gain;
                 peak = juce::jmax (peak, std::abs (data[i]));
             }
 
@@ -193,7 +206,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "Pump"; }
+    const juce::String getName() const override { return "Undertow"; }
     void releaseResources() override {}
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
@@ -219,10 +232,12 @@ private:
     std::atomic<float>* threshParam = params.getRawParameterValue ("thresh");
     std::atomic<float>* shiftParam = params.getRawParameterValue ("shift");
     std::atomic<float>* lengthParam = params.getRawParameterValue ("length");
+    std::atomic<float>* loopParam = params.getRawParameterValue ("loop");
+    std::atomic<float>* listenParam = params.getRawParameterValue ("listen");
 
     juce::dsp::LinkwitzRileyFilter<float> crossover;
     double rate = 44100.0, beats = 0.0, oneShot = 1.0;
     float gain = 1.0f, smooth = 1.0f, env = 0.0f, envDecay = 0.0f;
-    bool armed = true;
+    bool armed = true, triggered = false;
     int lastBin = -1;
 };
