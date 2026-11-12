@@ -5,7 +5,7 @@ set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "")
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(Undertow VERSION 2.0.0 LANGUAGES C CXX)
+project(Undertow VERSION 2.0.1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 if(MSVC)
     add_compile_options(/MP) # compile files in parallel
