@@ -30,6 +30,8 @@ jobs:
         with:
           path: build
           key: build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+      # Never ship anything left over from a cached run: the plugin itself is always relinked.
+      - run: rm -rf build/Pump_artefacts
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build -C Release --output-on-failure
